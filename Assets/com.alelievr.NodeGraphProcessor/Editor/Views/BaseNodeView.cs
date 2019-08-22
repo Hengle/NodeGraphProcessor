@@ -28,14 +28,26 @@ namespace GraphProcessor
         protected VisualElement 				controlsContainer;
 		protected VisualElement					debugContainer;
 
+		VisualElement							settings;
+		VisualElement							settingButton;
+
 		Label									computeOrderLabel = new Label();
 
 		public event Action< PortView >			onPortConnected;
 		public event Action< PortView >			onPortDisconnected;
 
-		readonly string							baseNodeStyle = "GraphProcessorStyles/BaseNodeView";
+		protected virtual bool					hasSettings => false;
 
-		#region  Initialization
+        public bool								initializing = false; //Used for applying SetPosition on locked node at init.
+
+        readonly string							baseNodeStyle = "GraphProcessorStyles/BaseNodeView";
+
+		bool									settingsExpanded = false;
+
+		[System.NonSerialized]
+		List< IconBadge >						badges = new List< IconBadge >();
+
+			#region  Initialization
 
 		public void Initialize(BaseGraphView owner, BaseNode node)
 		{
@@ -43,6 +55,8 @@ namespace GraphProcessor
 			this.owner = owner;
 
 			owner.computeOrderUpdated += ComputeOrderUpdatedCallback;
+			node.onMessageAdded += AddMessageView;
+			node.onMessageRemoved += RemoveMessageView;
 
             styleSheets.Add(Resources.Load<StyleSheet>(baseNodeStyle));
 
@@ -54,6 +68,10 @@ namespace GraphProcessor
 			InitializeDebug();
 
 			Enable();
+
+			InitializeSettings();
+
+			RefreshExpandedState();
 
 			this.RefreshPorts();
 		}
@@ -84,7 +102,53 @@ namespace GraphProcessor
 
 			title = (string.IsNullOrEmpty(nodeTarget.name)) ? nodeTarget.GetType().Name : nodeTarget.name;
 
-			SetPosition(nodeTarget.position);
+            initializing = true;
+
+            SetPosition(nodeTarget.position);
+		}
+
+		void InitializeSettings()
+		{
+			// Initialize settings button:
+			if (hasSettings)
+				CreateSettingButton();
+		}
+		
+		void CreateSettingButton()
+		{
+			settingButton = new VisualElement {name = "settings-button"};
+			settingButton.Add(new VisualElement { name = "icon" });
+			settings = new VisualElement();
+
+			// Add Node type specific settings
+			settings.Add(CreateSettingsView());
+
+			// Add manipulators
+			settingButton.AddManipulator(new Clickable(ToggleSettings));
+
+			var buttonContainer = new VisualElement { name = "button-container" };
+			buttonContainer.style.flexDirection = FlexDirection.Row;
+			buttonContainer.Add(settingButton);
+			titleContainer.Add(buttonContainer);
+		}
+
+		void ToggleSettings()
+		{
+			settingsExpanded = !settingsExpanded;
+			if (settingsExpanded)
+			{
+				topContainer.parent.Insert(0, settings);
+				owner.ClearSelection();
+				owner.AddToSelection(this);
+
+				settingButton.AddToClassList("clicked");
+			}
+			else
+			{
+				settings.RemoveFromHierarchy();
+
+				settingButton.RemoveFromClassList("clicked");
+			}
 		}
 
 		void InitializeDebug()
@@ -175,16 +239,20 @@ namespace GraphProcessor
 		{
 			var scriptPath = NodeProvider.GetNodeViewScript(GetType());
 
+#pragma warning disable CS0618 // Deprecated function but no alternative :(
 			if (scriptPath != null)
 				InternalEditorUtility.OpenFileAtLineExternal(scriptPath, 0);
+#pragma warning restore CS0618
 		}
 
 		public void OpenNodeScript()
 		{
 			var scriptPath = NodeProvider.GetNodeScript(nodeTarget.GetType());
 
+#pragma warning disable CS0618 // Deprecated function but no alternative :(
 			if (scriptPath != null)
 				InternalEditorUtility.OpenFileAtLineExternal(scriptPath, 0);
+#pragma warning restore CS0618
 		}
 
 		public void ToggleDebug()
@@ -199,6 +267,52 @@ namespace GraphProcessor
 				mainContainer.Add(debugContainer);
 			else
 				mainContainer.Remove(debugContainer);
+		}
+
+		public void AddMessageView(string message, Texture icon, Color color)
+			=> AddBadge(new NodeBadgeView(message, icon, color));
+
+		public void AddMessageView(string message, NodeMessageType messageType)
+		{
+			IconBadge	badge = null;
+			switch (messageType)
+			{
+				case NodeMessageType.Warning:
+					badge = new NodeBadgeView(message, EditorGUIUtility.IconContent("Collab.Warning").image, Color.yellow);
+					break ;
+				case NodeMessageType.Error:	
+					badge = IconBadge.CreateError(message);
+					break ;
+				case NodeMessageType.Info:
+					badge = IconBadge.CreateComment(message);
+					break ;
+				default:
+				case NodeMessageType.None:
+					badge = new NodeBadgeView(message, null, Color.grey);
+					break ;
+			}
+			
+			AddBadge(badge);
+		}
+
+		void AddBadge(IconBadge badge)
+		{
+			Add(badge);
+			badges.Add(badge);
+			badge.AttachTo(topContainer, SpriteAlignment.TopRight);
+		}
+
+		public void RemoveMessageView(string message)
+		{
+			badges.RemoveAll(b => {
+				if (b.badgeText == message)
+				{
+					b.Detach();
+					b.RemoveFromHierarchy();
+					return true;
+				}
+				return false;
+			});
 		}
 
 		#endregion
@@ -247,12 +361,12 @@ namespace GraphProcessor
 			}
 		}
 
-		public void OnPortConnected(PortView port)
+		internal void OnPortConnected(PortView port)
 		{
 			onPortConnected?.Invoke(port);
 		}
 
-		public void OnPortDisconnected(PortView port)
+		internal void OnPortDisconnected(PortView port)
 		{
 			onPortDisconnected?.Invoke(port);
 		}
@@ -264,10 +378,14 @@ namespace GraphProcessor
 
 		public override void SetPosition(Rect newPos)
 		{
-			base.SetPosition(newPos);
+            if (initializing || !nodeTarget.isLocked)
+            {
+                initializing = false;
+                base.SetPosition(newPos);
 
-			Undo.RegisterCompleteObjectUndo(owner.graph, "Moved graph node");
-			nodeTarget.position = newPos;
+                Undo.RegisterCompleteObjectUndo(owner.graph, "Moved graph node");
+                nodeTarget.position = newPos;
+            }
 		}
 
 		public override bool	expanded
@@ -280,14 +398,26 @@ namespace GraphProcessor
 			}
 		}
 
-		public override void BuildContextualMenu(ContextualMenuPopulateEvent evt)
+        public void ChangeLockStatus()
+        {
+            nodeTarget.nodeLock ^= true;
+        }
+
+        public override void BuildContextualMenu(ContextualMenuPopulateEvent evt)
 		{
 			evt.menu.AppendAction("Open Node Script", (e) => OpenNodeScript(), OpenNodeScriptStatus);
 			evt.menu.AppendAction("Open Node View Script", (e) => OpenNodeViewScript(), OpenNodeViewScriptStatus);
 			evt.menu.AppendAction("Debug", (e) => ToggleDebug(), DebugStatus);
-		}
+            if (nodeTarget.unlockable)
+                evt.menu.AppendAction((nodeTarget.isLocked ? "Unlock" : "Lock"), (e) => ChangeLockStatus(), LockStatus);
+        }
 
-		Status DebugStatus(DropdownMenuAction action)
+        Status LockStatus(DropdownMenuAction action)
+        {
+            return Status.Normal;
+        }
+
+        Status DebugStatus(DropdownMenuAction action)
 		{
 			if (nodeTarget.debug)
 				return Status.Checked;
@@ -315,7 +445,7 @@ namespace GraphProcessor
 			// Maybe not good to remove ports as edges are still connected :/
 			foreach (var pv in portViews.ToList())
 			{
-				// If the port have disepeared from the node datas, we remove the view:
+				// If the port have disappeared from the node data, we remove the view:
 				// We can use the identifier here because this function will only be called when there is a custom port behavior
 				if (!ports.Any(p => p.portData.identifier == pv.portData.identifier))
 					RemovePort(pv);
@@ -325,9 +455,34 @@ namespace GraphProcessor
 			{
 				// Add missing port views
 				if (!portViews.Any(pv => p.portData.identifier == pv.portData.identifier))
-					AddPort(p.fieldInfo, Direction.Input, listener, p.portData);
+				{
+					Direction portDirection = nodeTarget.IsFieldInput(p.fieldName) ? Direction.Input : Direction.Output;
+					AddPort(p.fieldInfo, portDirection, listener, p.portData);
+				}
 			}
 		}
+
+		// void UpdatePortConnections(List< PortView > portViews)
+		// {
+		// 	foreach (var pv in portViews)
+		// 	{
+		// 		Debug.Log("pv: " + pv.portName);
+				
+		// 		// Go over all connected edges and disconnect them if the serialized edge have been removed
+		// 		// This can happens when the new port type is incompatible with the old one.
+		// 		foreach (var edge in pv.GetEdges().ToList())
+		// 		{
+		// 			// TODO: check edge connection compatibility !
+		// 			Debug.Log("Edge !");
+		// 			if (owner.graph.edges.Contains(edge.serializedEdge))
+		// 			{
+		// 				owner.Disconnect(edge);
+		// 				// owner.RemoveElement(edge);
+		// 				// base.RefreshPorts(); // We don't call this.RefreshPorts because it will cause an infinite loop
+		// 			}
+		// 		}
+		// 	}
+		// }
 
 		public new bool RefreshPorts()
 		{
@@ -351,13 +506,14 @@ namespace GraphProcessor
 					p.Zip(pv, (portPerFieldName, portViewPerFieldName) => {
 						if (portPerFieldName.Count() != portViewPerFieldName.Count())
 							SyncPortCounts(portPerFieldName, portViewPerFieldName);
+						// UpdatePortConnections(portViewPerFieldName.ToList());
 						// We don't care about the result, we just iterate over port and portView
 						return "";
 					}).ToList();
 				}
 
-				// Here we're sure that we have the same amout of port and portView
-				// so we can update the view with the new port datas (if the name of a port have been changed for example)
+				// Here we're sure that we have the same amount of port and portView
+				// so we can update the view with the new port data (if the name of a port have been changed for example)
 
 				for (int i = 0; i < portViews.Count; i++)
 				{
@@ -376,6 +532,8 @@ namespace GraphProcessor
 
 			RefreshPorts();
 		}
+		
+		protected virtual VisualElement CreateSettingsView() => new Label("Settings");
 
 		#endregion
     }

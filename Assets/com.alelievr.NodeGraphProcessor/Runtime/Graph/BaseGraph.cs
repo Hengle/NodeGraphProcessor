@@ -16,6 +16,16 @@ namespace GraphProcessor
 		public bool					input = true;
 	}
 
+	public class GraphChanges
+	{
+		public SerializableEdge	removedEdge;
+		public SerializableEdge	addedEdge;
+		public BaseNode			removedNode;
+		public BaseNode			addedNode;
+		public CommentBlock		addedCommentBlock;
+		public CommentBlock		removedCommentBlock;
+	}
+
 	[System.Serializable]
 	public class BaseGraph : ScriptableObject, ISerializationCallbackReceiver
 	{
@@ -56,8 +66,7 @@ namespace GraphProcessor
 		public event Action< string >	onExposedParameterModified;
 		public event Action				onEnabled;
 
-		public event Action< BaseNode >	onNodeRemoved;
-		public event Action< BaseNode > onNodeAdded;
+		public event Action< GraphChanges > onGraphChanges;
 
 		[System.NonSerialized]
 		bool _isEnabled = false;
@@ -73,51 +82,96 @@ namespace GraphProcessor
 			onEnabled?.Invoke();
         }
 
-		public void AddNode(BaseNode node)
+		public BaseNode AddNode(BaseNode node)
 		{
 			nodes.Add(node);
 			node.Initialize(this);
 
-			onNodeAdded?.Invoke(node);
+			onGraphChanges?.Invoke(new GraphChanges{ addedNode = node });
+
+			return node;
 		}
 
 		public void RemoveNode(BaseNode node)
 		{
 			nodes.Remove(node);
-			onNodeRemoved?.Invoke(node);
+
+			onGraphChanges?.Invoke(new GraphChanges{ removedNode = node });
 		}
 
-		public SerializableEdge Connect(NodePort inputPort, NodePort outputPort)
+		public SerializableEdge Connect(NodePort inputPort, NodePort outputPort, bool autoDisconnectInputs = true)
 		{
 			var edge = SerializableEdge.CreateNewEdge(this, inputPort, outputPort);
+			
+			//If the input port does not support multi-connection, we remove them
+			if (autoDisconnectInputs && !inputPort.portData.acceptMultipleEdges)
+			{
+				foreach (var e in inputPort.GetEdges().ToList())
+				{
+					// TODO: do not disconnect them if the connected port is the same than the old connected
+					Disconnect(e);
+				}
+			}
+			// same for the output port:
+			if (autoDisconnectInputs && !outputPort.portData.acceptMultipleEdges)
+			{
+				foreach (var e in outputPort.GetEdges().ToList())
+				{
+					// TODO: do not disconnect them if the connected port is the same than the old connected
+					Disconnect(e);
+				}
+			}
 
 			edges.Add(edge);
+
+			onGraphChanges?.Invoke(new GraphChanges{ addedEdge = edge });
+			
+			// Add the edge to the list of connected edges in the nodes
+			inputPort.owner.OnEdgeConnected(edge);
+			outputPort.owner.OnEdgeConnected(edge);
 
 			return edge;
 		}
 
 		public void Disconnect(BaseNode inputNode, string inputFieldName, BaseNode outputNode, string outputFieldName)
 		{
-			edges.RemoveAll(r => r.inputNode == inputNode
+			edges.RemoveAll(r => {
+				bool remove = r.inputNode == inputNode
 				&& r.outputNode == outputNode
 				&& r.outputFieldName == outputFieldName
-				&& r.inputFieldName == inputFieldName
-			);
+				&& r.inputFieldName == inputFieldName;
+
+				if (remove)
+					onGraphChanges?.Invoke(new GraphChanges{ removedEdge = r });
+
+				return remove;
+			});
 		}
+
+		public void Disconnect(SerializableEdge edge) => Disconnect(edge.GUID);
 
 		public void Disconnect(string edgeGUID)
 		{
-			edges.RemoveAll(r => r.GUID == edgeGUID);
+			edges.RemoveAll(r => {
+				if (r.GUID == edgeGUID)
+				{
+					onGraphChanges?.Invoke(new GraphChanges{ removedEdge = r });
+					r.inputNode?.OnEdgeDisonnected(r);
+				}
+				return r.GUID == edgeGUID;
+			});
 		}
 
         public void AddCommentBlock(CommentBlock block)
         {
             commentBlocks.Add(block);
+			onGraphChanges?.Invoke(new GraphChanges{ addedCommentBlock = block });
         }
 
         public void RemoveCommentBlock(CommentBlock block)
         {
             commentBlocks.Remove(block);
+			onGraphChanges?.Invoke(new GraphChanges{ removedCommentBlock = block });
         }
 
 		public PinnedElement OpenPinned(Type viewType)
@@ -168,14 +222,21 @@ namespace GraphProcessor
 				nodesPerGUID[node.GUID] = node;
 			}
 
-			foreach (var edge in edges.ToList()) // Copy
+			foreach (var edge in edges.ToList())
 			{
 				edge.Deserialize();
 				edgesPerGUID[edge.GUID] = edge;
 
 				// Sanity check for the edge:
 				if (edge.inputPort == null || edge.outputPort == null)
+				{
 					Disconnect(edge.GUID);
+					continue;
+				}
+
+				// Add the edge to the non-serialized port datas
+				edge.inputPort.owner.OnEdgeConnected(edge);
+				edge.outputPort.owner.OnEdgeConnected(edge);
 			}
 		}
 
@@ -227,10 +288,10 @@ namespace GraphProcessor
 			string valueType = value.GetType().AssemblyQualifiedName;
 
 			if (valueType != param.type)
-				throw new Exception("Type mismatch when updating parameter " + name + ": from " + param.type + " to " + valueType);
+				throw new Exception("Type mismatch when updating parameter " + param.name + ": from " + param.type + " to " + valueType);
 
 			param.serializedValue.value = value;
-			onExposedParameterModified.Invoke(name);
+			onExposedParameterModified.Invoke(param.guid);
 		}
 
 		public void UpdateExposedParameterName(ExposedParameter parameter, string name)
@@ -248,6 +309,22 @@ namespace GraphProcessor
 		{
 			return exposedParameters.FirstOrDefault(e => e.guid == guid);
 		}
+
+		public bool SetParameterValue(string name, object value)
+		{
+			var e = exposedParameters.FirstOrDefault(p => p.name == name);
+
+			if (e == null)
+				return false;
+
+			e.serializedValue.value = value;
+
+			return true;
+		}
+
+		public object GetParameterValue(string name) => exposedParameters.FirstOrDefault(p => p.name == name)?.serializedValue?.value;
+
+		public T GetParameterValue< T >(string name) => (T)GetParameterValue(name);
 
 		int UpdateComputeOrder(int depth, BaseNode node)
 		{
@@ -300,5 +377,25 @@ namespace GraphProcessor
 			);
 			nodes.RemoveAll(n => n == null);
 		}
+		
+		/// <summary>
+		/// Tell if two types can be connected in the context of a graph
+		/// </summary>
+		/// <param name="t1"></param>
+		/// <param name="t2"></param>
+		/// <returns></returns>
+		public static bool TypesAreConnectable(Type t1, Type t2)
+		{
+			//Check if there is custom adapters for this assignation
+			if (CustomPortIO.IsAssignable(t1, t2))
+				return true;
+
+			//Check for type assignability
+			if (t2.IsReallyAssignableFrom(t1))
+				return true;
+
+			return false;
+		}
+
 	}
 }
