@@ -13,14 +13,14 @@ namespace GraphProcessor
 
         VisualElement   parameterContainer;
 
-        void OnEnable()
+        protected virtual void OnEnable()
         {
             graph = target as BaseGraph;
             graph.onExposedParameterListChanged += UpdateExposedParameters;
             graph.onExposedParameterModified += UpdateExposedParameters;
         }
 
-        void OnDisable()
+        protected virtual void OnDisable()
         {
             graph.onExposedParameterListChanged -= UpdateExposedParameters;
             graph.onExposedParameterModified -= UpdateExposedParameters;
@@ -50,6 +50,9 @@ namespace GraphProcessor
 
             foreach (var param in graph.exposedParameters)
             {
+                if(param.settings.isHidden)
+                    continue;
+                
                 VisualElement prop = new VisualElement();
                 prop.style.display = DisplayStyle.Flex;
                 Type paramType = Type.GetType(param.type);

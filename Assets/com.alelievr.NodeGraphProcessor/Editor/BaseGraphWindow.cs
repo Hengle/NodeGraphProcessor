@@ -30,7 +30,10 @@ namespace GraphProcessor
 		public event Action< BaseGraph >	graphLoaded;
 		public event Action< BaseGraph >	graphUnloaded;
 
-		protected void OnEnable()
+		/// <summary>
+		/// Called by Unity when the window is enabled / opened
+		/// </summary>
+		protected virtual void OnEnable()
 		{
 			InitializeRootView();
 
@@ -44,11 +47,19 @@ namespace GraphProcessor
 			}
 		}
 
-		protected void OnDisable()
+		/// <summary>
+		/// Called by Unity when the window is disabled (happens on domain reload)
+		/// </summary>
+		protected virtual void OnDisable()
 		{
 			if (graph != null && graphView != null)
 				graphView.SaveGraphToDisk();
 		}
+		
+		/// <summary>
+		/// Called by Unity when the window is closed
+		/// </summary>
+		protected virtual void OnDestroy() { }
 
 		void InitializeRootView()
 		{
@@ -63,6 +74,9 @@ namespace GraphProcessor
 		{
 			if (this.graph != null && graph != this.graph)
 			{
+				// Save the graph to the disk
+				EditorUtility.SetDirty(this.graph);
+				AssetDatabase.SaveAssets();
 				// Unload the graph
 				graphUnloaded?.Invoke(this.graph);
 				Resources.UnloadAsset(this.graph);

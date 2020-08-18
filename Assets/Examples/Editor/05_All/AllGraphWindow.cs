@@ -6,36 +6,47 @@ using GraphProcessor;
 
 public class AllGraphWindow : BaseGraphWindow
 {
-	[MenuItem("Window/03_CustomContextMenu")]
-	public static BaseGraphWindow Open()
+	BaseGraph			tmpGraph;
+	CustomToolbarView	toolbarView;
+
+	[MenuItem("Window/05 All Combined")]
+	public static BaseGraphWindow OpenWithTmpGraph()
 	{
-		var graphWindow = GetWindow< AllGraphWindow >();
+		var graphWindow = CreateWindow< AllGraphWindow >();
+
+		// When the graph is opened from the window, we don't save the graph to disk
+		graphWindow.tmpGraph = ScriptableObject.CreateInstance<BaseGraph>();
+		graphWindow.tmpGraph.hideFlags = HideFlags.HideAndDontSave;
+		graphWindow.InitializeGraph(graphWindow.tmpGraph);
 
 		graphWindow.Show();
 
 		return graphWindow;
 	}
 
-	protected new void OnEnable()
+	protected override void OnDestroy()
 	{
-		base.OnEnable();
-		// graphLoaded += g => Debug.Log("Load: " + g);
-		// graphUnloaded += g => Debug.Log("Unload: " + g);
+		graphView?.Dispose();
+		DestroyImmediate(tmpGraph);
 	}
 
 	protected override void InitializeWindow(BaseGraph graph)
 	{
 		titleContent = new GUIContent("All Graph");
 
-		var graphView = new AllGraphView(this);
+		if (graphView == null)
+		{
+			graphView = new AllGraphView(this);
+			toolbarView = new CustomToolbarView(graphView);
+			graphView.Add(toolbarView);
+		}
 
 		rootView.Add(graphView);
-
-		graphView.Add(new CustomToolbarView(graphView));
 	}
 
 	protected override void InitializeGraphView(BaseGraphView view)
 	{
-		view.OpenPinned< ExposedParameterView >();
+		// graphView.OpenPinned< ExposedParameterView >();
+		// toolbarView.UpdateButtonStatus();
 	}
 }

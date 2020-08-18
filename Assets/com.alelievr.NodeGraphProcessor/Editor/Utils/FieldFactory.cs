@@ -111,10 +111,16 @@ namespace GraphProcessor
 			}
 
 			// For mutiline
-			if (field is TextField textField)
-				textField.multiline = true;
-			if (field is ObjectField objField)
-				objField.objectType = t;
+			switch (field)
+			{
+				case TextField textField:
+					textField.multiline = true;
+					break;
+				case ObjectField objField:
+					objField.allowSceneObjects = true;
+					objField.objectType = typeof(UnityEngine.Object);
+					break;
+			}
 			
 			return field as VisualElement;
 		}
@@ -138,10 +144,35 @@ namespace GraphProcessor
 		{
 			if (typeof(Enum).IsAssignableFrom(fieldType))
 				fieldType = typeof(Enum);
-			
-			var createFieldSpecificMethod = createFieldMethod.MakeGenericMethod(fieldType);
 
-			return createFieldSpecificMethod.Invoke(null, new object[]{value, onValueChanged, label}) as VisualElement;
+			VisualElement field = null;
+
+			try
+			{
+				var createFieldSpecificMethod = createFieldMethod.MakeGenericMethod(fieldType);
+				try
+				{
+					field = createFieldSpecificMethod.Invoke(null, new object[]{value, onValueChanged, label}) as VisualElement;
+				} catch {}
+
+				// handle the Object field case
+				if (field == null && (value == null || value is UnityEngine.Object))
+				{
+					createFieldSpecificMethod = createFieldMethod.MakeGenericMethod(typeof(UnityEngine.Object));
+					field = createFieldSpecificMethod.Invoke(null, new object[]{value, onValueChanged, label}) as VisualElement;
+					if (field is ObjectField objField)
+					{
+						objField.objectType = fieldType;
+						objField.value = value as UnityEngine.Object;
+					}
+				}
+			}
+			catch (Exception e)
+			{
+				Debug.LogError(e);
+			}
+
+			return field;
 		}
 	}
 }

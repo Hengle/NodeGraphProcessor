@@ -6,22 +6,35 @@ using GraphProcessor;
 
 public class ExposedPropertiesGraphWindow : BaseGraphWindow
 {
+	BaseGraph	tmpGraph;
 
-	[MenuItem("Window/03_CustomContextMenu")]
-	public static BaseGraphWindow Open()
+	[MenuItem("Window/04 Exposed Properties")]
+	public static BaseGraphWindow OpenWithTmpGraph()
 	{
-		var graphWindow = GetWindow< ExposedPropertiesGraphWindow >();
+		var graphWindow = CreateWindow< ExposedPropertiesGraphWindow >();
+
+		// When the graph is opened from the window, we don't save the graph to disk
+		graphWindow.tmpGraph = ScriptableObject.CreateInstance<BaseGraph>();
+		graphWindow.tmpGraph.hideFlags = HideFlags.HideAndDontSave;
+		graphWindow.InitializeGraph(graphWindow.tmpGraph);
 
 		graphWindow.Show();
 
 		return graphWindow;
 	}
 
+	protected override void OnDestroy()
+	{
+		graphView?.Dispose();
+		DestroyImmediate(tmpGraph);
+	}
+
 	protected override void InitializeWindow(BaseGraph graph)
 	{
 		titleContent = new GUIContent("Properties Graph");
 
-		var graphView = new ExposedPropertiesGraphView(this);
+		if (graphView == null)
+			graphView = new ExposedPropertiesGraphView(this);
 
 		rootView.Add(graphView);
 	}

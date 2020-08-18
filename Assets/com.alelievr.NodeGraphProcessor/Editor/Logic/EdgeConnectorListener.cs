@@ -3,22 +3,28 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor.Experimental.GraphView;
 using UnityEngine.UIElements;
+using UnityEditor;
 
 namespace GraphProcessor
 {
-    public sealed class EdgeConnectorListener : IEdgeConnectorListener
+    /// <summary>
+    /// Base class to write your own edge handling connection system
+    /// </summary>
+    public class BaseEdgeConnectorListener : IEdgeConnectorListener
     {
-        readonly BaseGraphView graphView;
+        protected readonly BaseGraphView graphView;
 
         Dictionary< Edge, PortView >    edgeInputPorts = new Dictionary< Edge, PortView >();
         Dictionary< Edge, PortView >    edgeOutputPorts = new Dictionary< Edge, PortView >();
 
-        public EdgeConnectorListener(BaseGraphView graphView)
+        static CreateNodeMenuWindow     edgeNodeCreateMenuWindow;
+
+        public BaseEdgeConnectorListener(BaseGraphView graphView)
         {
             this.graphView = graphView;
         }
 
-        public void OnDropOutsidePort(Edge edge, Vector2 position)
+        public virtual void OnDropOutsidePort(Edge edge, Vector2 position)
         {
 			this.graphView.RegisterCompleteObjectUndo("Disconnect edge");
 
@@ -26,10 +32,12 @@ namespace GraphProcessor
 			if (!edge.isGhostEdge)
 				graphView.Disconnect(edge as EdgeView);
 
-			//TODO: open new nodes selector and connect the created node if there is one
+            // when on of the port is null, then the edge was created and dropped outside of a port
+            if (edge.input == null || edge.output == null)
+                ShowNodeCreationMenuFromEdge(edge as EdgeView, position);
         }
 
-        public void OnDrop(GraphView graphView, Edge edge)
+        public virtual void OnDrop(GraphView graphView, Edge edge)
         {
 			var edgeView = edge as EdgeView;
             bool wasOnTheSamePort = false;
@@ -53,11 +61,24 @@ namespace GraphProcessor
 
             edgeInputPorts[edge] = edge.input as PortView;
             edgeOutputPorts[edge] = edge.output as PortView;
-			this.graphView.RegisterCompleteObjectUndo("Connected " + edgeView.input.node.name + " and " + edgeView.output.node.name);
-			if (!this.graphView.Connect(edge as EdgeView, autoDisconnectInputs: !wasOnTheSamePort))
+            try
+            {
+                this.graphView.RegisterCompleteObjectUndo("Connected " + edgeView.input.node.name + " and " + edgeView.output.node.name);
+                if (!this.graphView.Connect(edge as EdgeView, autoDisconnectInputs: !wasOnTheSamePort))
+                    this.graphView.Disconnect(edge as EdgeView);
+            } catch (System.Exception)
             {
                 this.graphView.Disconnect(edge as EdgeView);
             }
+        }
+
+        void ShowNodeCreationMenuFromEdge(EdgeView edgeView, Vector2 position)
+        {
+            if (edgeNodeCreateMenuWindow == null)
+                edgeNodeCreateMenuWindow = ScriptableObject.CreateInstance< CreateNodeMenuWindow >();
+
+            edgeNodeCreateMenuWindow.Initialize(graphView, EditorWindow.focusedWindow, edgeView);
+			SearchWindow.Open(new SearchWindowContext(position + EditorWindow.focusedWindow.position.position), edgeNodeCreateMenuWindow);
         }
     }
 }

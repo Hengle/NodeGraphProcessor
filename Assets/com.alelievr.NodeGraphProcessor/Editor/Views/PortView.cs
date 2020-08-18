@@ -14,13 +14,13 @@ namespace GraphProcessor
 		public Type					fieldType => fieldInfo.FieldType;
 		public new Type				portType;
         public BaseNodeView     	owner { get; private set; }
-		public readonly PortData	portData;
+		public PortData				portData;
 
 		public event Action< PortView, Edge >	OnConnected;
 		public event Action< PortView, Edge >	OnDisconnected;
 
 		protected FieldInfo		fieldInfo;
-		protected EdgeConnectorListener	listener;
+		protected BaseEdgeConnectorListener	listener;
 
 		string userPortStyleFile = "PortViewTypes";
 
@@ -30,39 +30,68 @@ namespace GraphProcessor
 
 		readonly string portStyle = "GraphProcessorStyles/PortView";
 
-        public PortView(Orientation orientation, Direction direction, FieldInfo fieldInfo, PortData portData, EdgeConnectorListener edgeConnectorListener)
+        PortView(Orientation orientation, Direction direction, FieldInfo fieldInfo, PortData portData, BaseEdgeConnectorListener edgeConnectorListener)
             : base(orientation, direction, Capacity.Multi, portData.displayType ?? fieldInfo.FieldType)
 		{
-			styleSheets.Add(Resources.Load<StyleSheet>(portStyle));
-
-			var userPortStyle = Resources.Load<StyleSheet>(userPortStyleFile);
-
-			if (userPortStyle != null)
-				styleSheets.Add(userPortStyle);
-
-			this.m_EdgeConnector = new EdgeConnector< EdgeView >(edgeConnectorListener);
-			this.AddManipulator(m_EdgeConnector);
-
 			this.fieldInfo = fieldInfo;
 			this.listener = edgeConnectorListener;
 			this.portType = portData.displayType ?? fieldInfo.FieldType;
 			this.portData = portData;
 			this.portName = fieldName;
+
+			styleSheets.Add(Resources.Load<StyleSheet>(portStyle));
+
+			UpdatePortSize();
+
+			var userPortStyle = Resources.Load<StyleSheet>(userPortStyleFile);
+			if (userPortStyle != null)
+				styleSheets.Add(userPortStyle);
+			
+			this.tooltip = portData.tooltip;
+		}
+
+		public static PortView CreatePV(Orientation orientation, Direction direction, FieldInfo fieldInfo, PortData portData, BaseEdgeConnectorListener edgeConnectorListener)
+		{
+			var pv = new PortView(orientation, direction, fieldInfo, portData, edgeConnectorListener);
+			pv.m_EdgeConnector = new BaseEdgeConnector(edgeConnectorListener);
+			pv.AddManipulator(pv.m_EdgeConnector);
+
+			return pv;
+		}
+
+		/// <summary>
+		/// Update the size of the port view (using the portData.sizeInPixel property)
+		/// </summary>
+		public void UpdatePortSize()
+		{
+			int size = portData.sizeInPixel == 0 ? 8 : portData.sizeInPixel;
+			var connector = this.Q("connector");
+			var cap = connector.Q("cap");
+			connector.style.width = size;
+			connector.style.height = size;
+			cap.style.width = size - 4;
+			cap.style.height = size - 4;
+
+			// Update connected edge sizes:
+			edges.ForEach(e => e.UpdateEdgeSize());
 		}
 
 		public virtual void Initialize(BaseNodeView nodeView, string name)
 		{
 			this.owner = nodeView;
+			AddToClassList(fieldName);
 
 			// Correct port type if port accept multiple values (and so is a container)
 			if (direction == Direction.Input && portData.acceptMultipleEdges && portType == fieldType) // If the user haven't set a custom field type
 			{
-				portType = fieldType.GetGenericArguments()[0];
+				if (fieldType.GetGenericArguments().Length > 0)
+					portType = fieldType.GetGenericArguments()[0];
 			}
 
 			if (name != null)
 				portName = name;
 			visualClass = "Port_" + portType.Name;
+			tooltip = portData.tooltip;
 		}
 
 		public override void Connect(Edge edge)
@@ -98,16 +127,29 @@ namespace GraphProcessor
 			edges.Remove(edge as EdgeView);
 		}
 
-		public void UpdatePortView(string displayName, Type displayType)
+		public void UpdatePortView(PortData data)
 		{
-			if (displayType != null)
+			if (data.displayType != null)
 			{
-				base.portType = displayType;
-				portType = displayType;
+				base.portType = data.displayType;
+				portType = data.displayType;
 				visualClass = "Port_" + portType.Name;
 			}
-			if (!String.IsNullOrEmpty(displayName))
-				base.portName = displayName;
+			if (!String.IsNullOrEmpty(data.displayName))
+				base.portName = data.displayName;
+
+			portData = data;
+
+			// Update the edge in case the port color have changed
+			schedule.Execute(() => {
+				foreach (var edge in edges)
+				{
+					edge.UpdateEdgeControl();
+					edge.MarkDirtyRepaint();
+				}
+			}).ExecuteLater(50); // Hummm
+
+			UpdatePortSize();
 		}
 
 		public List< EdgeView >	GetEdges()
